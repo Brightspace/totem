@@ -1,0 +1,164 @@
+# Copyright 2017 D2L Corporation
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+AWSTemplateFormatVersion: 2010-09-09
+
+Parameters:
+  RoleARN:
+    Type: String
+    Description: The ARN of the role that this pipeline will assume during its
+      runs
+  BucketName:
+    Type: String
+    Description: The bucket where this pipeline will store its build artifacts
+  BlueGreenStackName:
+    Type: String
+    Description: The name of the stack that this pipeline will use to control
+      blue/green deployments
+
+  FetchSourceRepositoryName:
+    Type: String
+    Description: During its FetchSource GitHub action, this pipeline
+      * fetches the code referenced by
+          FetchSourceRepositoryName and FetchSourceRepositoryBranchName,
+      * using the credentials specified by
+          FetchSourceRepositoryOwner and FetchSourceRepositoryToken
+  FetchSourceRepositoryBranchName:
+    Type: String
+    Description: See FetchSourceRepositoryName
+    Default: master
+  FetchSourceRepositoryOwner:
+    Type: String
+    Description: See FetchSourceRepositoryName
+    Default: Brightspace
+  FetchSourceRepositoryToken:
+    Type: String
+    Description: See FetchSourceRepositoryName
+    NoEcho: true
+
+  BuildSourceBuildName:
+    Type: String
+    Description: The name of the build project that this pipeline will call
+      during its BuildSource action
+
+  RunSystemTestsBuildName:
+    Type: String
+    Description: The name of the build project that this pipeline will call
+      during its RunSystemTests action
+
+Resources:
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn: !Ref RoleARN
+      Name: !Ref AWS::StackName
+      ArtifactStore:
+        Type: S3
+        Location: !Ref BucketName
+      Stages:
+      - Name: Fetch
+        Actions:
+        - Name: FetchSource
+          InputArtifacts: []
+          OutputArtifacts: [Name: FetchSourceOutput]
+          ActionTypeId:
+            Category: Source
+            Owner: ThirdParty
+            Provider: GitHub
+            Version: 1
+          Configuration:
+            Branch: !Ref FetchSourceRepositoryBranchName
+            Repo: !Ref FetchSourceRepositoryName
+            Owner: !Ref FetchSourceRepositoryOwner
+            OAuthToken: !Ref FetchSourceRepositoryToken
+
+      - Name: BlueGreenDeploy 
+        Actions:
+        - Name: BuildSource
+          InputArtifacts: [Name: FetchSourceOutput]
+          OutputArtifacts: [Name: BuildSourceOutput]
+          ActionTypeId:
+            Category: Build
+            Owner: AWS
+            Provider: CodeBuild
+            Version: 1
+          Configuration:
+            ProjectName: !Ref BuildSourceBuildName
+          RunOrder: 1
+
+        - Name: PreDeploy
+          InputArtifacts: [Name: FetchSourceOutput, Name: BuildSourceOutput]
+          OutputArtifacts: []
+          ActionTypeId:
+            Category: Deploy
+            Owner: AWS
+            Provider: CloudFormation
+            Version: 1
+          Configuration:
+            ActionMode: CREATE_UPDATE
+            StackName: !Ref BlueGreenStackName
+            TemplatePath: BuildSourceOutput::totem-blue-green.yaml
+            TemplateConfiguration: FetchSourceOutput::totem-client/src/cfn/main/totem-pre-deploy.json
+            Capabilities: CAPABILITY_IAM
+            RoleArn: !Ref RoleARN
+            OutputFileName: output.json
+          RunOrder: 2
+
+        - Name: Deploy
+          InputArtifacts: [Name: FetchSourceOutput, Name: BuildSourceOutput]
+          OutputArtifacts: [Name: DeployOutput]
+          ActionTypeId:
+            Category: Deploy
+            Owner: AWS
+            Provider: CloudFormation
+            Version: 1
+          Configuration:
+            ActionMode: CREATE_UPDATE
+            StackName: !Ref BlueGreenStackName
+            TemplatePath: BuildSourceOutput::totem-blue-green.yaml
+            TemplateConfiguration: FetchSourceOutput::totem-client/src/cfn/main/totem-deploy.json
+            Capabilities: CAPABILITY_IAM
+            RoleArn: !Ref RoleARN
+            OutputFileName: output.json
+          RunOrder: 3
+
+        - Name: RunSystemTests
+          InputArtifacts: [Name: FetchSourceOutput]
+          OutputArtifacts: []
+          ActionTypeId:
+            Category: Build
+            Owner: AWS
+            Provider: CodeBuild
+            Version: 1
+          Configuration:
+            ProjectName: !Ref RunSystemTestsBuildName
+          RunOrder: 4
+
+        - Name: PostDeploy
+          InputArtifacts: [Name: FetchSourceOutput, Name: BuildSourceOutput, Name: DeployOutput]
+          OutputArtifacts: []
+          ActionTypeId:
+            Category: Deploy
+            Owner: AWS
+            Provider: CloudFormation
+            Version: 1
+          Configuration:
+            ActionMode: CREATE_UPDATE
+            StackName: !Ref BlueGreenStackName
+            TemplatePath: BuildSourceOutput::totem-blue-green.yaml
+            TemplateConfiguration: FetchSourceOutput::totem-client/src/cfn/main/totem-post-deploy.json
+            Capabilities: CAPABILITY_IAM
+            RoleArn: !Ref RoleARN
+          RunOrder: 5
+
