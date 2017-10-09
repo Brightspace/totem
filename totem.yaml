@@ -1,0 +1,85 @@
+# Copyright 2017 D2L Corporation
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+AWSTemplateFormatVersion: 2010-09-09
+
+Parameters:
+  RepositoryName:
+    Type: String
+    Description: While fetching code, Totem
+      * fetches the code referenced by RepositoryName and RepositoryBranchName
+      * using the credentials specified by RepositoryOwner and RepositoryToken
+  RepositoryBranchName:
+    Type: String
+    Description: See RepositoryName
+    Default: master
+  RepositoryOwner:
+    Type: String
+    Description: See RepositoryName
+  RepositoryToken:
+    Type: String
+    Description: See RepositoryName
+    NoEcho: true
+
+Resources:
+  PipelineBucket:
+    Type: AWS::CloudFormation::Stack
+    Properties: 
+      TemplateURL: src/cfn/main/bucket.yaml
+
+  PipelineRole:
+    Type: AWS::CloudFormation::Stack
+    Properties: 
+      TemplateURL: src/cfn/main/pipeline_role.yaml
+
+  BuildRole:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: src/cfn/main/build_role.yaml
+      Parameters:
+        BucketName: !GetAtt PipelineBucket.Outputs.BucketName
+        LogGroupName: !Sub "/aws/codebuild/${AWS::StackName}"
+
+  CommitBuild:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: src/cfn/main/commit_build.yaml
+      Parameters:
+        BlueGreenStackName: !Sub "${AWS::StackName}-blue-green"
+        ServiceRoleARN: !GetAtt BuildRole.Outputs.RoleARN
+
+  SystemTestBuild:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: src/cfn/main/test_build.yaml
+      Parameters:
+        ServiceRoleARN: !GetAtt BuildRole.Outputs.RoleARN
+        BlueGreenStackName: !Sub "${AWS::StackName}-blue-green"
+        TestCommand: sh totem-client/src/code-build/main/system_tests.sh
+
+  Pipeline:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: src/cfn/main/pipeline.yaml
+      Parameters:
+        RoleARN: !GetAtt PipelineRole.Outputs.RoleARN
+        BucketName: !GetAtt PipelineBucket.Outputs.BucketName
+        BlueGreenStackName: !Sub "${AWS::StackName}-blue-green"
+        FetchSourceRepositoryName: !Ref RepositoryName
+        FetchSourceRepositoryBranchName: !Ref RepositoryBranchName
+        FetchSourceRepositoryOwner: !Ref RepositoryOwner
+        FetchSourceRepositoryToken: !Ref RepositoryToken
+        BuildSourceBuildName: !GetAtt CommitBuild.Outputs.BuildName
+        RunSystemTestsBuildName: !GetAtt SystemTestBuild.Outputs.BuildName
+ 

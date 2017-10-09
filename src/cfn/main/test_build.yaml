@@ -1,0 +1,62 @@
+# Copyright 2017 D2L Corporation
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+AWSTemplateFormatVersion: 2010-09-09
+
+Parameters:
+  ServiceRoleARN:
+    Type: String
+    Description: The ARN of the role that this build will assume
+  BlueGreenStackName:
+    Type: String
+    Description: The name of the stack that this build will query while
+      executing its tests
+  TestCommand:
+    Type: String
+    Description: The command that this build will execute to launch the tests
+
+Outputs:
+  BuildName:
+    Value: !Ref Build
+
+Resources:
+  Build:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Ref AWS::StackName
+      ServiceRole: !Ref ServiceRoleARN
+      Artifacts:
+        Type: CODEPIPELINE
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: !Sub |
+          version: 0.1
+          
+          phases:
+            install:
+              commands:
+              - bash totem-client/src/code-build/main/install.sh
+            build:
+              commands:
+              - ${TestCommand}
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/nodejs:6.3.1
+        EnvironmentVariables:
+        - Name: TOTEM_BLUE_GREEN_STACK_NAME
+          Value: !Ref BlueGreenStackName
+        - Name: OUTPUT_NAME
+          Value: ResourceUnderTestName
+      TimeoutInMinutes: 10
