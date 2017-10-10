@@ -1,0 +1,66 @@
+# Copyright 2017 D2L Corporation
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+AWSTemplateFormatVersion: 2010-09-09
+
+Outputs:
+  RoleARN:
+    Value: !GetAtt Role.Arn
+
+Parameters:
+  LogGroupName:
+    Type: String
+    Description:
+      The name of the CloudWatch Logs group to which this role grants access
+  BucketName:
+    Type: String
+    Description: The name of the S3 bucket to which this role grants access
+
+Resources:
+  Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: codebuild.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/AWSCloudFormationReadOnlyAccess
+
+      Policies:
+      - PolicyName: !Ref "AWS::StackName"
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Effect: Allow
+            Resource:
+            - !Sub "arn:aws:logs:*:*:log-group:${LogGroupName}*"
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+          - Effect: Allow
+            Resource:
+            - !Sub "arn:aws:s3:::${BucketName}/*"
+            Action:
+            - s3:GetObject
+            - s3:GetObjectVersion
+            - s3:PutObject
+          - Effect: Allow
+            Resource: "*"
+            Action:
+            - cloudformation:ValidateTemplate
