@@ -190,7 +190,15 @@ Resources:
     Properties: 
       EventPattern: {
         "source": [ "aws.codecommit" ],
-        "resources": [ !Ref FetchSourceRepositoryArn ]
+        "resources": [ !Ref FetchSourceRepositoryArn ],
+        "detail": {
+           "event": [
+             "referenceCreated",
+             "referenceUpdated"
+           ],
+           "referenceType":["branch"],
+           "referenceName": ["master"]
+        }
       }
       State: ENABLED
       Targets:
@@ -219,10 +227,3 @@ Resources:
             Action:
               - codepipeline:StartPipelineExecution
 
-#         "detail": {
-#            "event": [
-#              "referenceCreated",
-#              "referenceUpdated"],
-#            "referenceType":["branch"],
-#            "referenceName": ["branch_name"]
-#         }
