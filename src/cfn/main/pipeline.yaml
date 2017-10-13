@@ -160,5 +160,9 @@ Resources:
             TemplateConfiguration: FetchSourceOutput::totem-client/src/cfn/main/totem-post-deploy.json
             Capabilities: CAPABILITY_IAM
             RoleArn: !Ref RoleARN
+            ParameterOverrides: !Sub |
+              {
+                "Color": { "Fn::GetParam" : ["DeployOutput", "output.json", "NextColor"] }
+              }
           RunOrder: 5
 
