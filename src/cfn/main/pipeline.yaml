@@ -27,25 +27,37 @@ Parameters:
     Description: The name of the stack that this pipeline will use to control
       blue/green deployments
 
+  FetchSourceRepositoryType:
+    Type: String
+    Description: This pipeline fetches code from either GitHub or CodeCommit
+      repositories, depending on the value of this parameter
+    AllowedValues: [GIT_HUB, CODE_COMMIT]
+    Default: GIT_HUB
+  FetchSourceRepositoryArn:
+    Type: String
+    Description: The source repo's ARN; ignored for GIT_HUB repositories
+    Default: ''
   FetchSourceRepositoryName:
     Type: String
-    Description: During its FetchSource GitHub action, this pipeline
-      * fetches the code referenced by
-          FetchSourceRepositoryName and FetchSourceRepositoryBranchName,
-      * using the credentials specified by
-          FetchSourceRepositoryOwner and FetchSourceRepositoryToken
+    Description: During its FetchSource action, this pipeline fetches the code
+      referenced by FetchSourceRepositoryName and
+      FetchSourceRepositoryBranchName
   FetchSourceRepositoryBranchName:
     Type: String
     Description: See FetchSourceRepositoryName
     Default: master
   FetchSourceRepositoryOwner:
     Type: String
-    Description: See FetchSourceRepositoryName
-    Default: Brightspace
+    Description: While fetching code from GitHub repositories, this pipeline
+      uses the credentials specified by FetchSourceRepositoryOwner and
+      FetchSourceRepositoryToken; these parameters are required for GitHub
+      repositories but are not required for CodeCommit repositories
+    Default: ''
   FetchSourceRepositoryToken:
     Type: String
-    Description: See FetchSourceRepositoryName
+    Description: See FetchSourceRepositoryOwner
     NoEcho: true
+    Default: ''
 
   BuildSourceBuildName:
     Type: String
@@ -56,6 +68,9 @@ Parameters:
     Type: String
     Description: The name of the build project that this pipeline will call
       during its RunSystemTests action
+
+Conditions:
+  IsCodeCommitRepository: !Equals [CODE_COMMIT, !Ref FetchSourceRepositoryType]
 
 Resources:
   Pipeline:
@@ -74,14 +89,17 @@ Resources:
           OutputArtifacts: [Name: FetchSourceOutput]
           ActionTypeId:
             Category: Source
-            Owner: ThirdParty
-            Provider: GitHub
+            Owner: !If [IsCodeCommitRepository, AWS, ThirdParty]
+            Provider: !If [IsCodeCommitRepository, CodeCommit, GitHub]
             Version: 1
           Configuration:
-            Branch: !Ref FetchSourceRepositoryBranchName
-            Repo: !Ref FetchSourceRepositoryName
-            Owner: !Ref FetchSourceRepositoryOwner
-            OAuthToken: !Ref FetchSourceRepositoryToken
+            RepositoryName: !If [IsCodeCommitRepository, !Ref FetchSourceRepositoryName, !Ref 'AWS::NoValue']
+            BranchName: !If [IsCodeCommitRepository, !Ref FetchSourceRepositoryBranchName, !Ref 'AWS::NoValue']
+            PollForSourceChanges: !If [IsCodeCommitRepository, false, !Ref 'AWS::NoValue']
+            Branch: !If [IsCodeCommitRepository, !Ref 'AWS::NoValue', !Ref FetchSourceRepositoryBranchName]
+            Repo: !If [IsCodeCommitRepository, !Ref 'AWS::NoValue', !Ref FetchSourceRepositoryName]
+            Owner: !If [IsCodeCommitRepository, !Ref 'AWS::NoValue', !Ref FetchSourceRepositoryOwner]
+            OAuthToken: !If [IsCodeCommitRepository, !Ref 'AWS::NoValue', !Ref FetchSourceRepositoryToken]
 
       - Name: BlueGreenDeploy 
         Actions:
@@ -165,4 +183,47 @@ Resources:
                 "Color": { "Fn::GetParam" : ["DeployOutput", "output.json", "NextColor"] }
               }
           RunOrder: 5
+
+  PipelineTriggerRule:
+    Type: AWS::Events::Rule
+    Condition: IsCodeCommitRepository
+    Properties: 
+      EventPattern: {
+        "source": [ "aws.codecommit" ],
+        "resources": [ !Ref FetchSourceRepositoryArn ],
+        "detail": {
+           "event": [
+             "referenceCreated",
+             "referenceUpdated"
+           ],
+           "referenceType":["branch"],
+           "referenceName": ["master"]
+        }
+      }
+      State: ENABLED
+      Targets:
+      - Id: !Sub '${AWS::StackName}-rule'
+        Arn: !Sub 'arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${Pipeline}'
+        RoleArn: !GetAtt PipelineTriggerRole.Arn
+
+  PipelineTriggerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: events.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: !Ref "AWS::StackName"
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Effect: Allow
+            Resource:
+            - !Sub 'arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${Pipeline}'
+            Action:
+              - codepipeline:StartPipelineExecution
 

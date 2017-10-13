@@ -15,24 +15,71 @@
 AWSTemplateFormatVersion: 2010-09-09
 
 Parameters:
-  RepositoryName:
+  RepositoryType:
     Type: String
-    Description: While fetching code, Totem
-      * fetches the code referenced by RepositoryName and RepositoryBranchName
-      * using the credentials specified by RepositoryOwner and RepositoryToken
-  RepositoryBranchName:
+    Description: Totem fetches code from either GitHub or CodeCommit
+      repositories, depending on the value of this parameter; for
+      GitHub, specify GitHubRepositoryX parameter values; for CodeCommit,
+      Totem will create a repository
+    AllowedValues: [GIT_HUB, CODE_COMMIT]
+    Default: GIT_HUB
+  GitHubRepositoryName:
     Type: String
-    Description: See RepositoryName
+    Description: While fetching code from GitHub repositories, Totem fetches
+      the code referenced by GitHubRepositoryName and
+      GitHubRepositoryBranchName
+    Default: ''
+  GitHubRepositoryBranchName:
+    Type: String
+    Description: See GitHubRepositoryName
     Default: master
-  RepositoryOwner:
+  GitHubRepositoryOwner:
     Type: String
-    Description: See RepositoryName
-  RepositoryToken:
+    Description: While fetching code from GitHub repositories, Totem uses the
+      credentials specified by GitHubRepositoryOwner and GitHubRepositoryToken
+    Default: ''
+  GitHubRepositoryToken:
     Type: String
-    Description: See RepositoryName
+    Description: See GitHubRepositoryOwner
     NoEcho: true
+    Default: ''
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterLabels:
+      RepositoryType:
+        default: 'Repository Type'
+      GitHubRepositoryName:
+        default: 'Repository Name'
+      GitHubRepositoryBranchName:
+        default: 'Branch Name'
+      GitHubRepositoryOwner:
+        default: 'Repository Owner'
+      GitHubRepositoryToken:
+        default: 'Repository Token'
+    ParameterGroups:
+    - Label:
+        default: Repository Type
+      Parameters: [ RepositoryType ]
+    - Label:
+        default: GitHub Details
+      Parameters:
+      - GitHubRepositoryName
+      - GitHubRepositoryBranchName
+      - GitHubRepositoryOwner
+      - GitHubRepositoryToken
+
+Conditions:
+  IsCodeCommitRepository: !Equals [CODE_COMMIT, !Ref RepositoryType]
 
 Resources:
+  SourceRepository:
+    Type: AWS::CodeCommit::Repository
+    Condition: IsCodeCommitRepository
+    DeletionPolicy: Retain
+    Properties:
+      RepositoryName: !Sub '${AWS::StackName}-repository'
+
   PipelineBucket:
     Type: AWS::CloudFormation::Stack
     Properties: 
@@ -76,10 +123,12 @@ Resources:
         RoleARN: !GetAtt PipelineRole.Outputs.RoleARN
         BucketName: !GetAtt PipelineBucket.Outputs.BucketName
         BlueGreenStackName: !Sub "${AWS::StackName}-blue-green"
-        FetchSourceRepositoryName: !Ref RepositoryName
-        FetchSourceRepositoryBranchName: !Ref RepositoryBranchName
-        FetchSourceRepositoryOwner: !Ref RepositoryOwner
-        FetchSourceRepositoryToken: !Ref RepositoryToken
+        FetchSourceRepositoryType: !Ref RepositoryType
+        FetchSourceRepositoryArn: !If [IsCodeCommitRepository, !GetAtt SourceRepository.Arn, !Ref 'AWS::NoValue']
+        FetchSourceRepositoryName: !If [IsCodeCommitRepository, !GetAtt SourceRepository.Name, !Ref GitHubRepositoryName]
+        FetchSourceRepositoryBranchName: !If [IsCodeCommitRepository, master, !Ref GitHubRepositoryBranchName]
+        FetchSourceRepositoryOwner: !If [IsCodeCommitRepository, !Ref 'AWS::NoValue', !Ref GitHubRepositoryOwner]
+        FetchSourceRepositoryToken: !If [IsCodeCommitRepository, !Ref 'AWS::NoValue', !Ref GitHubRepositoryToken]
         BuildSourceBuildName: !GetAtt CommitBuild.Outputs.BuildName
         RunSystemTestsBuildName: !GetAtt SystemTestBuild.Outputs.BuildName
  
