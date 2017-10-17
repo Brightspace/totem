@@ -127,10 +127,13 @@ Resources:
             ActionMode: CREATE_UPDATE
             StackName: !Ref BlueGreenStackName
             TemplatePath: BuildSourceOutput::totem-blue-green.yaml
-            TemplateConfiguration: FetchSourceOutput::totem-client/src/cfn/main/totem-pre-deploy.json
             Capabilities: CAPABILITY_IAM
             RoleArn: !Ref RoleARN
             OutputFileName: output.json
+            ParameterOverrides: |
+              {
+                "Phase": "PRE_DEPLOY"
+              }
           RunOrder: 2
 
         - Name: Deploy
@@ -145,10 +148,13 @@ Resources:
             ActionMode: CREATE_UPDATE
             StackName: !Ref BlueGreenStackName
             TemplatePath: BuildSourceOutput::totem-blue-green.yaml
-            TemplateConfiguration: FetchSourceOutput::totem-client/src/cfn/main/totem-deploy.json
             Capabilities: CAPABILITY_IAM
             RoleArn: !Ref RoleARN
             OutputFileName: output.json
+            ParameterOverrides: !Sub |
+              {
+                "Phase": "DEPLOY"
+              }
           RunOrder: 3
 
         - Name: RunSystemTests
@@ -175,12 +181,12 @@ Resources:
             ActionMode: CREATE_UPDATE
             StackName: !Ref BlueGreenStackName
             TemplatePath: BuildSourceOutput::totem-blue-green.yaml
-            TemplateConfiguration: FetchSourceOutput::totem-client/src/cfn/main/totem-post-deploy.json
             Capabilities: CAPABILITY_IAM
             RoleArn: !Ref RoleARN
             ParameterOverrides: !Sub |
               {
-                "Color": { "Fn::GetParam" : ["DeployOutput", "output.json", "NextColor"] }
+                "Color": { "Fn::GetParam" : ["DeployOutput", "output.json", "NextColor"] },
+                "Phase": "POST_DEPLOY"
               }
           RunOrder: 5
 
