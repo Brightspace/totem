@@ -17,7 +17,7 @@ Totem is a [blue-green](https://martinfowler.com/bliki/BlueGreenDeployment.html)
 
 ## Documentation
 
-Totem is made up of two parts which work together to blue-green deploy your application: the Totem pipeline itself and the Totem Client library.  During each pipeline run, Totem and Totem Client create and use a blue-green AWS CloudFormation template to drive deployment.
+Totem works together with your application templates to blue-green deploy your application.  During each pipeline run, Totem creates and uses a blue-green AWS CloudFormation template to drive application deployment.
 
 ### An overview of Totem
 
@@ -26,17 +26,13 @@ Totem is made up of two parts which work together to blue-green deploy your appl
 The Totem pipeline is defined in this repository as **totem.yaml**.  It is an AWS CodePipeline pipeline with two phases and six actions:
 
 1. In the **Fetch** phase, Totem watches your application repository for changes.  When Totem notices a change, it retrieves the changes and initiates a pipeline run.
-   1. During the **FetchSource** action, Totem retrieves your application code from GitHub.
+   1. During the **FetchSource** action, Totem retrieves your application code from either CodeCommit or GitHub.
 1. In the **BlueGreenDeploy** phase, Totem builds and deploys your application.
-   1. During the **BuildSource** action, Totem builds your application.  As part of the build, it combines your application code with the Totem Client to create an AWS CloudFormation blue-green template.  This blue-green template drives the deployment for the rest of the pipeline run.  See X for more information on the blue-green template.
+   1. During the **BuildSource** action, Totem builds your application.  As part of the build, it folds your application templates into a parent AWS CloudFormation blue-green template.  This blue-green template drives the deployment for the rest of the pipeline run.
    1. During the **PreDeploy** action, Totem updates any existing blue-green stack for a new deployment.  It ensures that your application's infrastructure dependencies are available and that the blue-green stack is in a clean and consistent state.
    1. During the **Deploy** action, Totem deploys a new application stack and its test dependencies.  This new stack is an independent copy of your application, which can be fully tested in isolation.  This isolated stack is Totem's candidate for blue-green promotion.
    1. During the **RunSystemTests** action, Totem verifies the candidate stack with an AWS CodeBuild test project.  If the tests pass, then Totem will promote the new stack in the next action.
    1. During the **PostDeploy** action, Totem promotes the new application stack and cleans up any test dependencies.
-
-### An overview of Totem Client
-
-Totem Client helps Totem deploy your application.  It works with Totem during the **BuildSource** action to incorporate your application's template into a general blue-green deployment template.  Totem then uses the blue-green template to drive deployment, updating its blue-green stack during the **PreDeploy**, **Deploy**, and **PostDeploy** actions. To install Totem Client, commit a copy of the library into your application's GitHub repository.
 
 ### An overview of Totem's blue-green stack
 
@@ -45,15 +41,15 @@ Totem Client creates a blue-green AWS CloudFormation template, which drives Tote
 1. **GreenStack**, a copy of your application which is active during testing and when the pipeline is *green*;
 1. **TestOutgressStack**, a test stack which is available during testing (containing, *e.g.*, a test Amazon DynamoDB table), and on which **BlueStack** and **GreenStack** depend,
 1. **PermanentOutgressStack**, a stack of your application's permanent *depencies* (*e.g.*, an Amazon DynamoDB table), and
-1. **PermanentOutgressStack**, a stack of your application's permanent *dependents* (*e.g.*, an Amazon API Gateway BasePathMapping).
+1. **PermanentIngressStack**, a stack of your application's permanent *dependents* (*e.g.*, an Amazon API Gateway BasePathMapping).
 
 You can find and inspect Totem's blue-green stack in your account.  It appears as *\<totem stack name>* **-blue-green**.  The nested stacks are similarly available for inspection.
 
 ### A Totem example
 How does Totem use its blue-green template to deploy your application?  This is best explained with an example.  Note that Totem switches state, either from blue to green or vice versa, on each successful pipeline run.  The example below covers a switch from *blue* to *green*; the switch from *green* to *blue* is similar.
 
-1. During **FetchSource**, Totem fetches your application source code.  Totem assumes that your repository includes the Totem Client at *totem-client/*.
-1. During **BuildSource**, Totem builds your application and combines it with the source from Totem Client.  Totem expects the build code for both of these tasks--building your application and combining it with Totem Client--to live in your repository as an AWS CodeBuild *buildspec.yml* file.  Totem Client includes a *buildspec.yml.example* template that includes commands for invoking Totem Client.
+1. During **FetchSource**, Totem fetches your application source code.  Totem assumes that your repository contains *src/cfn/main/{main.yaml, permanent-ingress.yaml, permanent-outgress.yaml}* and *src/cfn/test/test-outgress.yaml*.
+1. During **BuildSource**, Totem combines your application template with its own blue-green template.
 1. During **PreDeploy**, Totem ensures that
    * **GreenStack** is deleted,
    * **TestOutgressStack** is deleted,
@@ -106,7 +102,7 @@ This stack defines your application's live (*i.e., production*) permanent depend
   * **GreenStack's** **InputValues** Parameter.
 * Totem treats this value as opaque; it's a value-passing channel for your application to use.
 
-#### PermanentOutgressStack
+#### PermanentIngressStack
 This stack defines your application's live (*i.e., production*) permanent dependents.  Totem will launch this stack on its first run of the **PostDeploy** action.  For example, if an Amazon API Gateway BasePathMapping points at your application and you do not want to delete the mapping during blue-green deployments, then you can define the mapping in **PermanentIngressStack**.  Totem will not blue-green deploy this stack during pipeline runs but it *will* perform an in-place update whenever the stack's template changes.
 * Totem expects **src/cfn/main/permanent-ingress.yaml** to live in your repository and define this stack.
   * You must provide this template.
@@ -119,7 +115,7 @@ This stack defines your application's live (*i.e., production*) permanent depend
 
 ## Versioning
 
-Totem is maintained under [the Semantic Versioning guidelines](http://semver.org/).
+Totem is maintained under [the Semantic Versioning guidelines](http://semver.org/).  Prior to v1.0.0, Totem does not aim to deliver backward compatibility.
 
 ## Contributing
 

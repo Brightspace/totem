@@ -37,6 +37,259 @@ Resources:
         Type: CODEPIPELINE
       Source:
         Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+
+          phases:
+            install:
+              commands:
+                - |
+                  cat >install.sh <<EOF
+                  set -eux
+                  set -o pipefail
+
+                  pip install --upgrade --user awscli
+
+                  apt-get update
+
+                  apt-get install -y jq
+                  EOF
+
+                - |
+                  cat >package.yaml <<EOF
+                  AWSTemplateFormatVersion: '2010-09-09'
+
+                  Resources:
+                    ServiceStack:
+                      Type: AWS::CloudFormation::Stack
+                      Properties:
+                        TemplateURL: src/cfn/main/main.yaml
+                  EOF
+
+                - |
+                  cat >build.sh <<"EOF"
+                  set -eux
+                  set -o pipefail
+
+                  die() {
+                    >&2 echo "${1}"
+                    exit "${2:-1}"
+                  }
+
+                  checkVersions() {
+                    jq --version
+                  }
+
+                  getStackOutputs() {
+                    OUTPUT="$(aws cloudformation describe-stacks --stack-name "${1}" | jq '.Stacks[0].Outputs | .[]')"
+                  }
+
+                  getDevTemplateURL() {
+                    aws cloudformation package --template-file "package.yaml" --s3-bucket "${TOTEM_BUCKET_NAME}" --s3-prefix "${s3Prefix}" --kms-key-id "${TOTEM_KMS_KEY_ID}"
+
+                    aws cloudformation package --template-file "package.yaml" --s3-bucket "${TOTEM_BUCKET_NAME}" --s3-prefix "${s3Prefix}" --kms-key-id "${TOTEM_KMS_KEY_ID}" | sed -n -e '/TemplateURL/s/^[[:blank:]]*TemplateURL:[[:blank:]]*//p' -e 's/[[:blank:]]*$//'
+
+                    OUTPUT=`aws cloudformation package --template-file "package.yaml" --s3-bucket "${TOTEM_BUCKET_NAME}" --s3-prefix "${s3Prefix}" --kms-key-id "${TOTEM_KMS_KEY_ID}" | sed -n -e '/TemplateURL/s/^[[:blank:]]*TemplateURL:[[:blank:]]*//p' -e 's/[[:blank:]]*$//'`
+                  }
+
+                  getStackOutput() {
+                    OUTPUT="$(echo "${1}" | jq -r 'select(.OutputKey=="'"${2}"'").OutputValue')"
+
+                    if [ -z "${OUTPUT}" ]
+                    then
+                      die "ERROR: Cannot find output in stack. [stack name = '${3}', output name = '${2}']"
+                    fi
+                  }
+
+                  TOTEM_BUCKET_NAME="${TOTEM_BUCKET_NAME:-$(echo $CODEBUILD_SOURCE_VERSION | grep -oP 'arn:aws:s3:::\K[^/]+')}"
+                  TOTEM_KMS_KEY_ID="${TOTEM_KMS_KEY_ID:-${CODEBUILD_KMS_KEY_ID}}"
+                  s3Prefix=blue-green-artifacts
+                  totemTemplateOutput="blue-green.yaml"
+                  totemPackageOutput="totem-blue-green.yaml"
+
+                  echo "Build started on `date`"
+
+                  checkVersions
+
+                  getDevTemplateURL
+                  devTemplateURL="${OUTPUT}"
+
+                  if getStackOutputs "${TOTEM_BLUE_GREEN_STACK_NAME}"
+                  then
+                    echo "Stack found; fetching outputs."
+                    stackOutputs="${OUTPUT}"
+
+                    getStackOutput "${stackOutputs}" FinalColor "${TOTEM_BLUE_GREEN_STACK_NAME}"
+                    color="${OUTPUT}"
+
+                    getStackOutput "${stackOutputs}" FinalIsFirstRun "${TOTEM_BLUE_GREEN_STACK_NAME}"
+                    isFirstRun="${OUTPUT}"
+
+                    getStackOutput "${stackOutputs}" FinalProdTemplateURL "${TOTEM_BLUE_GREEN_STACK_NAME}"
+                    prodTemplateURL="${OUTPUT}"
+                  else
+                    echo "Stack not found; using default values."
+
+                    color=GREEN
+                    isFirstRun=true
+                    prodTemplateURL="${devTemplateURL}"
+                  fi
+
+                  cat >"${totemTemplateOutput}" <<EOT
+                  AWSTemplateFormatVersion: '2010-09-09'
+
+                  Outputs:
+                    NextColor:
+                      Value: !If [ IsDeploy, !If [ IsBlue, GREEN, BLUE ], !Ref Color ]
+
+                    FinalColor:
+                      Value: !If [ IsPostDeploy, !Ref Color, ${color} ]
+                    FinalIsFirstRun:
+                      Value: !If [ IsPostDeploy, false, ${isFirstRun} ]
+                    FinalProdTemplateURL:
+                      Value: !If [ IsPostDeploy, '${devTemplateURL}', '${prodTemplateURL}' ]
+
+                    Color:
+                      Value: !Ref Color
+                    Phase:
+                      Value: !Ref Phase
+                    IsFirstRun:
+                      Value: !Ref IsFirstRun
+
+                    ActiveStack:
+                      Value: !If [ IsBlueStackActive, !If [ IsGreenStackActive, BOTH, BLUE ], !If [ IsGreenStackActive, GREEN, NONE ] ]
+                    MasterStackColor:
+                      Value: !If [ IsBlueStackMaster, !If [ IsGreenStackMaster, BOTH, BLUE ], !If [ IsGreenStackMaster, GREEN, NONE ] ]
+
+                    IsGreenStackUsingProdTemplate:
+                      Value: !If [ IsGreenStackUsingProdTemplate, true, false ]
+                    IsBlueStackUsingProdTemplate:
+                      Value: !If [ IsBlueStackUsingProdTemplate, true, false ]
+
+                    IsTestOutgressStackActive:
+                      Value: !If [ IsDeploy, true, false ]
+
+                  Parameters:
+                    Color:
+                      Type: String
+                      AllowedValues: [ BLUE, GREEN ]
+                      Default: ${color}
+                    Phase:
+                      Type: String
+                      AllowedValues: [ PRE_DEPLOY, DEPLOY, POST_DEPLOY ]
+                      Default: PRE_DEPLOY
+                    IsFirstRun:
+                      Type: String
+                      AllowedValues: [ true, false ]
+                      Default: ${isFirstRun}
+
+                  Conditions:
+                    IsBlue: !Equals [ !Ref Color, BLUE ]
+                    IsGreen: !Equals [ !Ref Color, GREEN ]
+
+                    IsPreDeploy: !Equals [ !Ref Phase, PRE_DEPLOY ]
+                    IsDeploy: !Equals [ !Ref Phase, DEPLOY ]
+                    IsPostDeploy: !Equals [ !Ref Phase, POST_DEPLOY ]
+
+                    IsFirstRun: !Equals [ !Ref IsFirstRun, true ]
+
+                    IsBlueStackActive: !Or
+                    - !And
+                      - !Not [ Condition: IsFirstRun ]
+                      - !Not [ !And [ Condition: IsGreen, Condition: IsPreDeploy ] ]
+                    - !And
+                      - Condition: IsFirstRun
+                      - !Or [ Condition: IsGreenDeploy, !And [ Condition: IsBlue, Condition: IsPostDeploy ] ]
+                    IsBlueStackMaster: !And [ Condition: IsBlueStackActive, Condition: IsBlue ]
+                    IsBlueDeploy: !And [ Condition: IsBlue, Condition: IsDeploy ]
+                    IsBlueStackUsingProdTemplate: !Or
+                    - !And [ Condition: IsBlue, !Not [ Condition: IsPostDeploy ] ]
+                    - !And [ Condition: IsGreen, Condition: IsPostDeploy ]
+
+                    IsGreenStackActive: !Or
+                    - !And
+                      - !Not [ Condition: IsFirstRun ]
+                      - !Not [ !And [ Condition: IsBlue, Condition: IsPreDeploy ] ]
+                    - !And
+                      - Condition: IsFirstRun
+                      - !Or [ Condition: IsBlueDeploy, !And [ Condition: IsGreen, Condition: IsPostDeploy ] ]
+                    IsGreenStackMaster: !And [ Condition: IsGreenStackActive, Condition: IsGreen ]
+                    IsGreenDeploy: !And [ Condition: IsGreen, Condition: IsDeploy ]
+                    IsGreenStackUsingProdTemplate: !Or
+                    - !And [ Condition: IsGreen, !Not [ Condition: IsPostDeploy ] ]
+                    - !And [ Condition: IsBlue, Condition: IsPostDeploy ]
+
+                    IsPermanentIngressStackActive: !Or
+                    - !Not [ Condition: IsFirstRun ]
+                    - !And
+                      - Condition: IsFirstRun
+                      - Condition: IsPostDeploy
+
+                  Resources:
+                    PermanentOutgressStack:
+                      Type: AWS::CloudFormation::Stack
+                      Properties:
+                        TemplateURL: src/cfn/main/permanent-outgress.yaml
+
+                    TestOutgressStack:
+                      Type: AWS::CloudFormation::Stack
+                      Condition: IsDeploy
+                      Properties:
+                        TemplateURL: src/cfn/test/test-outgress.yaml
+
+                    BlueStack:
+                      Type: AWS::CloudFormation::Stack
+                      Condition: IsBlueStackActive
+                      Properties:
+                        TemplateURL: !If
+                        - IsBlueStackUsingProdTemplate
+                        - ${prodTemplateURL}
+                        - ${devTemplateURL}
+                        Parameters:
+                          InputValues: !If
+                          - IsGreenDeploy
+                          - !GetAtt TestOutgressStack.Outputs.OutputValues
+                          - !GetAtt PermanentOutgressStack.Outputs.OutputValues
+
+                    GreenStack:
+                      Type: AWS::CloudFormation::Stack
+                      Condition: IsGreenStackActive
+                      Properties:
+                        TemplateURL: !If
+                        - IsGreenStackUsingProdTemplate
+                        - ${prodTemplateURL}
+                        - ${devTemplateURL}
+                        Parameters:
+                          InputValues: !If
+                          - IsBlueDeploy
+                          - !GetAtt TestOutgressStack.Outputs.OutputValues
+                          - !GetAtt PermanentOutgressStack.Outputs.OutputValues
+
+                    PermanentIngressStack:
+                      Type: AWS::CloudFormation::Stack
+                      Condition: IsPermanentIngressStackActive
+                      Properties:
+                        TemplateURL: src/cfn/main/permanent-ingress.yaml
+                        Parameters:
+                          InputValues: !If
+                          - IsBlue
+                          - !GetAtt BlueStack.Outputs.OutputValues
+                          - !GetAtt GreenStack.Outputs.OutputValues
+                  EOT
+
+                  aws cloudformation package --template-file "${totemTemplateOutput}" --s3-bucket "${TOTEM_BUCKET_NAME}" --s3-prefix "${s3Prefix}" --kms-key-id "$TOTEM_KMS_KEY_ID" --output-template-file "${totemPackageOutput}"
+                  aws cloudformation validate-template --template-body "file://${totemPackageOutput}"
+                  EOF
+
+                - bash install.sh
+            build:
+              commands:
+                - bash build.sh
+          artifacts:
+            files:
+              - totem-blue-green.yaml
+            discard-paths: yes
+
       Environment:
         Type: LINUX_CONTAINER
         ComputeType: BUILD_GENERAL1_SMALL
@@ -45,3 +298,4 @@ Resources:
         - Name: TOTEM_BLUE_GREEN_STACK_NAME
           Value: !Ref BlueGreenStackName
       TimeoutInMinutes: 10
+
