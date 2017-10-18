@@ -14,6 +14,10 @@
 
 AWSTemplateFormatVersion: 2010-09-09
 
+Outputs:
+  PipelineArn:
+    Value: !Sub 'arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${Pipeline}'
+
 Parameters:
   RoleARN:
     Type: String
@@ -29,20 +33,17 @@ Parameters:
 
   FetchSourceRepositoryType:
     Type: String
-    Description: This pipeline fetches code from either GitHub or CodeCommit
-      repositories, depending on the value of this parameter
-    AllowedValues: [GIT_HUB, CODE_COMMIT]
-    Default: GIT_HUB
-  FetchSourceRepositoryArn:
-    Type: String
-    Description: The source repo's ARN; ignored for GIT_HUB repositories
-    Default: ''
+    Description: Totem fetches code from S3, CodeCommit, or GitHub
+      repositories, depending on the value of this parameter; for
+      GitHub, specify GitHubRepositoryX parameter values
+    AllowedValues: [S3, CodeCommit, GitHub]
+    Default: GitHub
   FetchSourceRepositoryName:
     Type: String
     Description: During its FetchSource action, this pipeline fetches the code
       referenced by FetchSourceRepositoryName and
-      FetchSourceRepositoryBranchName
-  FetchSourceRepositoryBranchName:
+      FetchSourceRepositoryNamespace
+  FetchSourceRepositoryNamespace:
     Type: String
     Description: See FetchSourceRepositoryName
     Default: master
@@ -70,7 +71,10 @@ Parameters:
       during its RunSystemTests action
 
 Conditions:
-  IsCodeCommitRepository: !Equals [CODE_COMMIT, !Ref FetchSourceRepositoryType]
+  IsS3Repository: !Equals [S3, !Ref FetchSourceRepositoryType]
+  IsCodeCommitRepository: !Equals [CodeCommit, !Ref FetchSourceRepositoryType]
+  IsGitHubRepository: !Equals [GitHub, !Ref FetchSourceRepositoryType]
+  IsNotGitHubRepository: !Not [ Condition: IsGitHubRepository ]
 
 Resources:
   Pipeline:
@@ -89,17 +93,34 @@ Resources:
           OutputArtifacts: [Name: FetchSourceOutput]
           ActionTypeId:
             Category: Source
-            Owner: !If [IsCodeCommitRepository, AWS, ThirdParty]
-            Provider: !If [IsCodeCommitRepository, CodeCommit, GitHub]
+            Owner: !If [IsNotGitHubRepository, AWS, ThirdParty]
+            Provider: !If
+            - IsS3Repository
+            - S3
+            - !If
+              - IsCodeCommitRepository
+              - CodeCommit
+              - GitHub
             Version: 1
           Configuration:
+            S3Bucket: !If [IsS3Repository, !Ref FetchSourceRepositoryName, !Ref 'AWS::NoValue']
+            S3ObjectKey: !If [IsS3Repository, !Ref FetchSourceRepositoryNamespace, !Ref 'AWS::NoValue']
+
             RepositoryName: !If [IsCodeCommitRepository, !Ref FetchSourceRepositoryName, !Ref 'AWS::NoValue']
-            BranchName: !If [IsCodeCommitRepository, !Ref FetchSourceRepositoryBranchName, !Ref 'AWS::NoValue']
-            PollForSourceChanges: !If [IsCodeCommitRepository, false, !Ref 'AWS::NoValue']
-            Branch: !If [IsCodeCommitRepository, !Ref 'AWS::NoValue', !Ref FetchSourceRepositoryBranchName]
-            Repo: !If [IsCodeCommitRepository, !Ref 'AWS::NoValue', !Ref FetchSourceRepositoryName]
-            Owner: !If [IsCodeCommitRepository, !Ref 'AWS::NoValue', !Ref FetchSourceRepositoryOwner]
-            OAuthToken: !If [IsCodeCommitRepository, !Ref 'AWS::NoValue', !Ref FetchSourceRepositoryToken]
+            BranchName: !If [IsCodeCommitRepository, !Ref FetchSourceRepositoryNamespace, !Ref 'AWS::NoValue']
+
+            PollForSourceChanges: !If
+            - IsS3Repository
+            - true
+            - !If
+              - IsCodeCommitRepository
+              - false
+              - !Ref 'AWS::NoValue'
+
+            Repo: !If [IsGitHubRepository, !Ref FetchSourceRepositoryName, !Ref 'AWS::NoValue']
+            Branch: !If [IsGitHubRepository, !Ref FetchSourceRepositoryNamespace, !Ref 'AWS::NoValue']
+            Owner: !If [IsGitHubRepository, !Ref FetchSourceRepositoryOwner, !Ref 'AWS::NoValue']
+            OAuthToken: !If [IsGitHubRepository, !Ref FetchSourceRepositoryToken, !Ref 'AWS::NoValue']
 
       - Name: BlueGreenDeploy 
         Actions:
@@ -189,47 +210,3 @@ Resources:
                 "Phase": "POST_DEPLOY"
               }
           RunOrder: 5
-
-  PipelineTriggerRule:
-    Type: AWS::Events::Rule
-    Condition: IsCodeCommitRepository
-    Properties: 
-      EventPattern: {
-        "source": [ "aws.codecommit" ],
-        "resources": [ !Ref FetchSourceRepositoryArn ],
-        "detail": {
-           "event": [
-             "referenceCreated",
-             "referenceUpdated"
-           ],
-           "referenceType":["branch"],
-           "referenceName": ["master"]
-        }
-      }
-      State: ENABLED
-      Targets:
-      - Id: !Sub '${AWS::StackName}-rule'
-        Arn: !Sub 'arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${Pipeline}'
-        RoleArn: !GetAtt PipelineTriggerRole.Arn
-
-  PipelineTriggerRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: 2012-10-17
-        Statement:
-        - Effect: Allow
-          Principal:
-            Service: events.amazonaws.com
-          Action: sts:AssumeRole
-      Policies:
-      - PolicyName: !Ref "AWS::StackName"
-        PolicyDocument:
-          Version: 2012-10-17
-          Statement:
-          - Effect: Allow
-            Resource:
-            - !Sub 'arn:aws:codepipeline:${AWS::Region}:${AWS::AccountId}:${Pipeline}'
-            Action:
-              - codepipeline:StartPipelineExecution
-

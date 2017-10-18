@@ -14,6 +14,12 @@
 
 AWSTemplateFormatVersion: 2010-09-09
 
+Parameters:
+  Versioning:
+    Type: String
+    AllowedValues: [Enabled, Suspended]
+    Default: Suspended
+
 Outputs:
   BucketName:
     Value: !Ref Bucket
@@ -24,7 +30,7 @@ Resources:
     Properties:
       AccessControl: Private
       VersioningConfiguration:
-        Status: Suspended
+        Status: !Ref Versioning
 
   Policy:
     Type: AWS::S3::BucketPolicy
