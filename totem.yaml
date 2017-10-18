@@ -21,8 +21,8 @@ Parameters:
       repositories, depending on the value of this parameter; for
       GitHub, specify GitHubRepositoryX parameter values; for CodeCommit,
       Totem will create a repository
-    AllowedValues: [GIT_HUB, CODE_COMMIT]
-    Default: GIT_HUB
+    AllowedValues: [S3, CodeCommit, GitHub]
+    Default: GitHub
   GitHubRepositoryName:
     Type: String
     Description: While fetching code from GitHub repositories, Totem fetches
@@ -70,15 +70,26 @@ Metadata:
       - GitHubRepositoryToken
 
 Conditions:
-  IsCodeCommitRepository: !Equals [CODE_COMMIT, !Ref RepositoryType]
+  IsS3Repository: !Equals [S3, !Ref RepositoryType]
+  IsCodeCommitRepository: !Equals [CodeCommit, !Ref RepositoryType]
+  IsGitHubRepository: !Equals [GitHub, !Ref RepositoryType]
+  IsNotGitHubRepository: !Not [ Condition: IsGitHubRepository ]
 
 Resources:
-  SourceRepository:
+  CodeCommitRepository:
     Type: AWS::CodeCommit::Repository
     Condition: IsCodeCommitRepository
     DeletionPolicy: Retain
     Properties:
       RepositoryName: !Sub '${AWS::StackName}-repository'
+
+  S3Repository:
+    Type: AWS::CloudFormation::Stack
+    Condition: IsS3Repository
+    Properties: 
+      TemplateURL: src/cfn/main/bucket.yaml
+      Parameters:
+        Versioning: Enabled
 
   PipelineBucket:
     Type: AWS::CloudFormation::Stack
@@ -115,8 +126,9 @@ Resources:
         BlueGreenStackName: !Sub "${AWS::StackName}-blue-green"
         TestCommand: sh totem-client/src/code-build/main/system_tests.sh
 
-  Pipeline:
+  S3Pipeline:
     Type: AWS::CloudFormation::Stack
+    Condition: IsS3Repository
     Properties:
       TemplateURL: src/cfn/main/pipeline.yaml
       Parameters:
@@ -124,11 +136,86 @@ Resources:
         BucketName: !GetAtt PipelineBucket.Outputs.BucketName
         BlueGreenStackName: !Sub "${AWS::StackName}-blue-green"
         FetchSourceRepositoryType: !Ref RepositoryType
-        FetchSourceRepositoryArn: !If [IsCodeCommitRepository, !GetAtt SourceRepository.Arn, !Ref 'AWS::NoValue']
-        FetchSourceRepositoryName: !If [IsCodeCommitRepository, !GetAtt SourceRepository.Name, !Ref GitHubRepositoryName]
-        FetchSourceRepositoryBranchName: !If [IsCodeCommitRepository, master, !Ref GitHubRepositoryBranchName]
-        FetchSourceRepositoryOwner: !If [IsCodeCommitRepository, !Ref 'AWS::NoValue', !Ref GitHubRepositoryOwner]
-        FetchSourceRepositoryToken: !If [IsCodeCommitRepository, !Ref 'AWS::NoValue', !Ref GitHubRepositoryToken]
+        FetchSourceRepositoryName: !GetAtt S3Repository.Outputs.BucketName
+        FetchSourceRepositoryNamespace: main.zip
         BuildSourceBuildName: !GetAtt CommitBuild.Outputs.BuildName
         RunSystemTestsBuildName: !GetAtt SystemTestBuild.Outputs.BuildName
+
+  CodeCommitPipeline:
+    Type: AWS::CloudFormation::Stack
+    Condition: IsCodeCommitRepository
+    Properties:
+      TemplateURL: src/cfn/main/pipeline.yaml
+      Parameters:
+        RoleARN: !GetAtt PipelineRole.Outputs.RoleARN
+        BucketName: !GetAtt PipelineBucket.Outputs.BucketName
+        BlueGreenStackName: !Sub "${AWS::StackName}-blue-green"
+        FetchSourceRepositoryType: !Ref RepositoryType
+        FetchSourceRepositoryName: !GetAtt CodeCommitRepository.Name
+        FetchSourceRepositoryNamespace: master
+        BuildSourceBuildName: !GetAtt CommitBuild.Outputs.BuildName
+        RunSystemTestsBuildName: !GetAtt SystemTestBuild.Outputs.BuildName
+
+  GitHubPipeline:
+    Type: AWS::CloudFormation::Stack
+    Condition: IsGitHubRepository
+    Properties:
+      TemplateURL: src/cfn/main/pipeline.yaml
+      Parameters:
+        RoleARN: !GetAtt PipelineRole.Outputs.RoleARN
+        BucketName: !GetAtt PipelineBucket.Outputs.BucketName
+        BlueGreenStackName: !Sub "${AWS::StackName}-blue-green"
+        FetchSourceRepositoryType: !Ref RepositoryType
+        FetchSourceRepositoryName: !Ref GitHubRepositoryName
+        FetchSourceRepositoryNamespace: !Ref GitHubRepositoryBranchName
+        FetchSourceRepositoryOwner: !Ref GitHubRepositoryOwner
+        FetchSourceRepositoryToken: !Ref GitHubRepositoryToken
+        BuildSourceBuildName: !GetAtt CommitBuild.Outputs.BuildName
+        RunSystemTestsBuildName: !GetAtt SystemTestBuild.Outputs.BuildName
+        RunSystemTestsBuildName: !GetAtt SystemTestBuild.Outputs.BuildName
+
+  PipelineTriggerRole:
+    Type: AWS::IAM::Role
+    Condition: IsCodeCommitRepository
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: events.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName: !Ref "AWS::StackName"
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Effect: Allow
+            Resource: !Sub '${CodeCommitPipeline.Outputs.PipelineArn}'
+            Action:
+              - codepipeline:StartPipelineExecution
+
+  PipelineTriggerRule:
+    Type: AWS::Events::Rule
+    Condition: IsCodeCommitRepository
+    Properties: 
+      EventPattern: !Sub |
+        {
+          "source": [ "aws.codecommit" ],
+          "resources": [ "${CodeCommitRepository.Arn}" ],
+          "detail": {
+             "event": [
+               "referenceCreated",
+               "referenceUpdated"
+             ],
+             "referenceType":["branch"],
+             "referenceName": ["master"]
+          }
+        }
+      State: ENABLED
+      Targets:
+      - Id: !Sub '${AWS::StackName}-rule'
+        Arn: !Sub '${CodeCommitPipeline.Outputs.PipelineArn}'
+        RoleArn: !GetAtt PipelineTriggerRole.Arn
+
  

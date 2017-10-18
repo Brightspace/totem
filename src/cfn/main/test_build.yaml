@@ -40,16 +40,7 @@ Resources:
         Type: CODEPIPELINE
       Source:
         Type: CODEPIPELINE
-        BuildSpec: !Sub |
-          version: 0.1
-          
-          phases:
-            install:
-              commands:
-              - bash totem-client/src/code-build/main/install.sh
-            build:
-              commands:
-              - ${TestCommand}
+        BuildSpec: src/code-build/test/testspec.yml
       Environment:
         Type: LINUX_CONTAINER
         ComputeType: BUILD_GENERAL1_SMALL
