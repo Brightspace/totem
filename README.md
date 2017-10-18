@@ -45,6 +45,14 @@ Totem Client creates a blue-green AWS CloudFormation template, which drives Tote
 
 You can find and inspect Totem's blue-green stack in your account.  It appears as *\<totem stack name>* **-blue-green**.  The nested stacks are similarly available for inspection.
 
+### Totem parameters
+
+* **RepositoryType** tells Totem the type of repository to watch; valid values are *S3*, *CodeCommit*, and *GitHub*; this parameter is not required and defaults to *GitHub*; for *S3* and *CodeCommit*, Totem creates a new repository and connects it to its pipeline; for *GitHub*, Totem expects connection info in the following parameters
+* **GitHubRepositoryName** tells Totem which GitHub repository to watch
+* **GitHubRepositoryBranchName** tells Totem which GitHub repository branch to watch
+* **GitHubRepositoryOwner** tells Totem which principal to use when accessing the GitHub repository
+* **GitHubRepositoryToken** allows Totem to authenticate as the specified principal
+
 ### A Totem example
 How does Totem use its blue-green template to deploy your application?  This is best explained with an example.  Note that Totem switches state, either from blue to green or vice versa, on each successful pipeline run.  The example below covers a switch from *blue* to *green*; the switch from *green* to *blue* is similar.
 
