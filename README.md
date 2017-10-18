@@ -6,8 +6,8 @@ Totem is a [blue-green](https://martinfowler.com/bliki/BlueGreenDeployment.html)
 
 ### Options for getting Totem
 
-* [![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=totem&templateURL=https://s3.amazonaws.com/totem-release/com/d2l/totem/0.0.2/totem-0.0.2.yaml) You can one-click deploy Totem into your AWS account.
-* Totem uses Amazon S3 for distribution.  [Totem is available from S3](https://s3.amazonaws.com/totem-release/com/d2l/totem/0.0.2/totem-0.0.2.yaml), to both the AWS console and the AWS CLI.
+* [![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/new?stackName=totem&templateURL=https://s3.amazonaws.com/totem-release/com/d2l/totem/0.0.3/totem-0.0.3.yaml) You can one-click deploy Totem into your AWS account.
+* Totem uses Amazon S3 for distribution.  [Totem is available from S3](https://s3.amazonaws.com/totem-release/com/d2l/totem/0.0.3/totem-0.0.3.yaml), to both the AWS console and the AWS CLI.
 
 ### Instructions for using Totem with the sample application
 
